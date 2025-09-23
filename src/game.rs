@@ -1,6 +1,6 @@
 use std::{error::Error, fmt::Display};
 
-use rayon::iter::{IndexedParallelIterator as _, IntoParallelIterator, ParallelIterator};
+use rayon::iter::{IndexedParallelIterator as _, IntoParallelIterator as _, ParallelIterator};
 
 use crate::N;
 
@@ -27,7 +27,8 @@ pub enum Score {
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct State {
-    board: [Option<Player>; (N*N) as usize]
+    board: [Option<Player>; (N*N) as usize],
+    score: Option<Score>
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,6 +44,10 @@ impl Error for InvalidMove {}
 
 impl State {
     pub fn score(self) -> Option<Score> {
+        self.score
+    }
+    
+    fn check_win(self) -> Option<Score> {
         for y in 0..N {
             let mut p = None;
             for x in 0..N {
@@ -123,7 +128,7 @@ impl State {
             }
         }
 
-        if self.board.into_iter().all(|v| v.is_some()) {
+        if self.board.iter().all(Option::is_some) {
             return Some(Score::Tie)
         }
 
@@ -150,7 +155,14 @@ impl State {
         }
     }
 
-    pub fn do_move(mut self, x: u32, y: u32) -> Result<Self, InvalidMove> {
+    pub fn do_move(mut self, x: u8, y: u8) -> Result<Self, InvalidMove> {
+        if self.score.is_some() {
+            return Err(InvalidMove);
+        }
+
+        let x = x as u32;
+        let y = y as u32;
+
         if x >= N || y >= N {
             return Err(InvalidMove);
         }
@@ -161,17 +173,30 @@ impl State {
         }
 
         self.board[idx] = Some(self.turn());
+        self.score = self.check_win();
         Ok(self)
     }
 
-    pub fn succs(self) -> impl ParallelIterator<Item = (u32, u32)> {
+    pub fn par_succs(self) -> impl ParallelIterator<Item = (u8, u8)> {
         assert!(self.score().is_none());
 
         self.board.into_par_iter()
             .enumerate()
             .filter_map(|(i, v)| {
                 let i = i as u32;
-                v.is_none().then_some((i % N, i / N))
+                v.is_none().then_some(((i % N) as u8, (i / N) as u8))
+            })
+    }
+
+    #[expect(dead_code)]
+    pub fn succs(self) -> impl Iterator<Item = (u8, u8)> {
+        assert!(self.score().is_none());
+
+        self.board.into_iter()
+            .enumerate()
+            .filter_map(|(i, v)| {
+                let i = i as u32;
+                v.is_none().then_some(((i % N) as u8, (i / N) as u8))
             })
     }
 }
