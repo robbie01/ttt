@@ -62,7 +62,7 @@ impl App {
 
         this.spawn_cb(
             async move {
-                let (_, pos) = unblock(move || maximize(board, Player::X)).await;
+                let pos = unblock(move || maximize(board, Player::X)).await;
                 let (x, y) = pos.unwrap();
                 board.do_move(x, y).unwrap()
             },
@@ -207,7 +207,7 @@ impl ApplicationHandler<AsyncEvent> for App {
                 let x = (pt.x * (N as f32) / 100.) as u8;
                 let y = (pt.y * (N as f32) / 100.) as u8;
 
-                if self.board.turn() == Player::O && self.board.score().is_none() && let Ok(nst) = self.board.do_move(x, y) {
+                if self.board.turn() == Some(Player::O) && self.board.score().is_none() && let Ok(nst) = self.board.do_move(x, y) {
                     self.board = nst;
                     self.sfc.as_ref().unwrap().window().request_redraw();
 
@@ -216,7 +216,7 @@ impl ApplicationHandler<AsyncEvent> for App {
                         self.timers.push(pt);
                         self.spawn_cb(
                             async move {
-                                let (_, pos) = unblock(move || maximize(nst, Player::X)).await;
+                                let pos = unblock(move || maximize(nst, Player::X)).await;
                                 timer.await;
                                 let (x, y) = pos.unwrap();
                                 nst.do_move(x, y).unwrap()
@@ -266,6 +266,10 @@ impl ApplicationHandler<AsyncEvent> for App {
 }
 
 fn main() -> anyhow::Result<()> {
+    rayon::ThreadPoolBuilder::new()
+        .stack_size(128 * 1024 * 1024)
+        .build_global()?;
+
     let evt = EventLoop::with_user_event().build()?;
     let mut app = App::new(evt.create_proxy());
     evt.run_app(&mut app)?;

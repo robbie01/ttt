@@ -1,6 +1,7 @@
 use std::hash::{BuildHasherDefault, DefaultHasher};
 
 use rayon::iter::ParallelIterator as _;
+use rpds::{HashTrieSet, HashTrieSetSync};
 use scc::HashMap;
 
 use crate::{game::{Player, Score, State}, N};
@@ -27,33 +28,41 @@ fn densely_pack(board: [Option<Player>; (N*N) as usize], p: Player) -> u64 {
     m
 }
 
-pub fn maximize(st: State, p: Player) -> (i8, Option<(u8, u8)>) {
-    // st caches wins, so this is faster than memo
-    if let Some(score) = st.score() {
-        return match score {
-            Score::Win(w) if w == p => (1, None),
-            Score::Win(_) => (-1, None),
-            Score::Tie => (0, None)
-        };
+pub fn maximize(st: State, p: Player) -> Option<(u8, u8)> {
+    fn inner(st: State, p: Player, mut seen: HashTrieSetSync<u64>) -> (i8, Option<(u8, u8)>) {
+        // st caches wins, so this is faster than memo
+        if let Some(score) = st.score() {
+            return match score {
+                Score::Win(w) if w == p => (1, None),
+                Score::Win(_) => (-1, None),
+                Score::Tie => (0, None)
+            };
+        }
+
+        let m = densely_pack(st.board(), p);
+        if seen.contains(&m) {
+            return (127, None)
+        }
+        seen.insert_mut(m);
+
+        if let Some(v) = MEMO.read_sync(&m, |_, &v| v) {
+            return v
+        }
+
+        assert_eq!(st.turn(), Some(p));
+
+        let Some(v) = st.par_succs()
+            .filter_map(|(x, y)| {
+                let nst = st.do_move(x, y).unwrap();
+                let (score, _) = inner(nst, p.other(), seen.clone());
+                (score != 127).then_some((-score, Some((x, y))))
+            })
+            .max_by_key(|&(score, _)| score) else { return (127, None) };
+
+        let _ = MEMO.insert_sync(m, v);
+
+        v
     }
 
-    let m = densely_pack(st.board(), p);
-
-    if let Some(v) = MEMO.read_sync(&m, |_, &v| v) {
-        return v
-    }
-
-    assert_eq!(st.turn(), p);
-
-    let v = st.par_succs()
-        .map(|(x, y)| {
-            let nst = st.do_move(x, y).unwrap();
-            let (score, _) = maximize(nst, p.other());
-            (-score, Some((x, y)))
-        })
-        .max_by_key(|&(score, _)| score).unwrap();
-
-    let _ = MEMO.insert_sync(m, v);
-
-    v
+    inner(st, p, HashTrieSet::new_sync()).1
 }

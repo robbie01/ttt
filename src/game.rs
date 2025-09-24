@@ -1,4 +1,4 @@
-use std::{error::Error, fmt::Display};
+use std::{convert::identity, error::Error, fmt::Display};
 
 use rayon::iter::{IndexedParallelIterator as _, IntoParallelIterator as _, ParallelIterator};
 
@@ -28,6 +28,7 @@ pub enum Score {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct State {
     board: [Option<Player>; (N*N) as usize],
+    cache: [Option<(u8, u8)>; (2*N) as usize],
     score: Option<Score>
 }
 
@@ -139,20 +140,26 @@ impl State {
         self.board
     }
 
-    pub fn turn(self) -> Player {
-        let (x, o) = self.board.into_iter().fold((0u8, 0u8), |(x, o), p| {
-            match p {
-                Some(Player::X) => (x + 1, o),
-                Some(Player::O) => (x, o + 1),
-                None => (x, o)
-            }
-        });
-        if x == o {
-            Player::X
-        } else {
-            assert_eq!(Some(x), o.checked_add(1));
-            Player::O
+    pub fn to_be_evicted(self) -> Option<[(u8, u8); 2]> {
+        if self.cache[self.cache.len()-1].is_none() {
+            return None;
         }
+        Some([self.cache[0].unwrap(), self.cache[1].unwrap()])
+    }
+
+    pub fn turn(self) -> Option<Player> {
+        if self.score.is_some() {
+            return None;
+        }
+
+        Some(if let Some((x, y)) = self.cache.into_iter().rev().filter_map(identity).next() {
+            let x = x as u32;
+            let y = y as u32;
+            let idx = (N * y + x) as usize;
+            self.board[idx].unwrap().other()
+        } else {
+            Player::X
+        })
     }
 
     pub fn do_move(mut self, x: u8, y: u8) -> Result<Self, InvalidMove> {
@@ -160,19 +167,33 @@ impl State {
             return Err(InvalidMove);
         }
 
-        let x = x as u32;
-        let y = y as u32;
+        {
+            let x = x as u32;
+            let y = y as u32;
 
-        if x >= N || y >= N {
-            return Err(InvalidMove);
+            if x >= N || y >= N {
+                return Err(InvalidMove);
+            }
+
+            let idx = (N * y + x) as usize;
+            if self.board[idx].is_some() {
+                return Err(InvalidMove);
+            }
+
+            self.board[idx] = self.turn();
         }
 
-        let idx = (N * y + x) as usize;
-        if self.board[idx].is_some() {
-            return Err(InvalidMove);
+        let cache_pos = self.cache.iter().position(Option::is_none);
+        if let Some(cache_pos) = cache_pos {
+            self.cache[cache_pos] = Some((x, y));
+        } else {
+            let (ex, ey) = self.cache[0].unwrap();
+            let idx = (N * u32::from(ey) + u32::from(ex)) as usize;
+            self.board[idx] = None;
+            self.cache.copy_within(1.., 0);
+            self.cache[self.cache.len()-1] = Some((x, y));
         }
 
-        self.board[idx] = Some(self.turn());
         self.score = self.check_win();
         Ok(self)
     }

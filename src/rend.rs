@@ -14,6 +14,11 @@ static TILE_PAINT: LazyLock<Paint> = LazyLock::new(|| Paint {
     ..Default::default()
 });
 
+static TILE_PAINT_EV: LazyLock<Paint> = LazyLock::new(|| Paint {
+    shader: Shader::SolidColor(Color::from_rgba8(216, 159, 255, 128)),
+    ..Default::default()
+});
+
 const STROKE: &Stroke = &Stroke {
     width: 5. / 3.,
     miter_limit: 4.,
@@ -70,15 +75,25 @@ impl Renderer {
 
         {
             let mut path_buffer = self.path_buffers.get_mut().pop().unwrap_or_default();
+            let mut path_buffer_ev = self.path_buffers.get_mut().pop().unwrap_or_default();
+
+            let ev = st.to_be_evicted();
 
             for (i, player) in st.board().into_iter().enumerate() {
                 let i = i as u32;
                 let x = i % N;
                 let y = i / N;
+                let pt = (x as u8, y as u8);
+                let pb =
+                    if st.score().is_none() && ev.is_some_and(|[a, b]| pt == a || pt == b) {
+                        &mut path_buffer_ev
+                    } else {
+                        &mut path_buffer
+                    };
                 if player == Some(Player::X) {
-                    draw_x(&mut path_buffer, x, y);
+                    draw_x(pb, x, y);
                 } else if player == Some(Player::O) {
-                    draw_o(&mut path_buffer, x, y);
+                    draw_o(pb, x, y);
                 }
             }
 
@@ -91,6 +106,17 @@ impl Renderer {
                 ));
             } else {
                 self.path_buffers.get_mut().push(path_buffer);
+            }
+
+            if !path_buffer_ev.is_empty() {
+                let path = path_buffer_ev.finish().unwrap().transform(Transform::from_scale(100. / N as f32, 100. / N as f32)).unwrap();
+                self.paths.get_mut().push(Drawable::Stroke(
+                    path,
+                    &TILE_PAINT_EV,
+                    STROKE
+                ));
+            } else {
+                self.path_buffers.get_mut().push(path_buffer_ev);
             }
         }
     }
