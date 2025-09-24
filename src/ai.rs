@@ -3,12 +3,12 @@ use rayon::iter::ParallelIterator as _;
 use crate::game::{Player, Score, State};
 
 
-pub fn maximize(st: State, p: Player) -> (i8, (u8, u8)) {
+pub fn maximize(st: State, p: Player) -> (i8, Option<(u8, u8)>) {
     if let Some(score) = st.score() {
         return match score {
-            Score::Win(w) if w == p => (1, (255, 255)),
-            Score::Win(_) => (-1, (255, 255)),
-            Score::Tie => (0, (255, 255))
+            Score::Win(w) if w == p => (1, None),
+            Score::Win(_) => (-1, None),
+            Score::Tie => (0, None)
         };
     }
 
@@ -18,7 +18,7 @@ pub fn maximize(st: State, p: Player) -> (i8, (u8, u8)) {
         .map(|(x, y)| {
             let nst = st.do_move(x, y).unwrap();
             let (score, _) = maximize(nst, p.other());
-            (-score, (x, y))
+            (-score, Some((x, y)))
         })
         .max_by_key(|&(score, _)| score).unwrap()
 }

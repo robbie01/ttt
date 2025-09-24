@@ -7,7 +7,7 @@ edition = "2024"
 anyhow = "1"
 winit = "0.30"
 softbuffer = "0.4"
-tiny-skia = "0.11"
+tiny-skia = { git = "https://github.com/linebender/tiny-skia.git", rev = "624257c" }
 async-task = "4.7"
 async-io = "2.6"
 rand = "0.9"

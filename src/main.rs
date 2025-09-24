@@ -2,31 +2,30 @@ mod ai;
 mod game;
 mod rend;
 
-use std::{iter, marker::PhantomData, rc::Rc, time::Duration};
+use std::{cell::Cell, iter, marker::PhantomData, rc::Rc, time::Duration};
 
 use async_io::Timer;
 use async_task::Runnable;
 use softbuffer::{Context, Surface};
-use tiny_skia::{Color, FillRule, Mask, NonZeroRect, PathBuilder, Pixmap, Point, Rect, Transform};
-use winit::{application::ApplicationHandler, dpi::{PhysicalPosition, PhysicalSize}, event::{ElementState, MouseButton}, event_loop::{EventLoop, EventLoopProxy}, window::{Window, WindowAttributes}};
+use tiny_skia::{Color, FillRule, IntSize, Mask, NonZeroRect, PathBuilder, Pixmap, Point, Rect, Transform};
+use winit::{application::ApplicationHandler, dpi::{PhysicalPosition, PhysicalSize}, event::{ElementState, MouseButton}, event_loop::{EventLoop, EventLoopProxy, OwnedDisplayHandle}, window::{Window, WindowAttributes}};
 
 use crate::{ai::maximize, game::{Player, State}, rend::Renderer};
 
 const N: u32 = 3;
 
 enum AsyncEvent {
-    Runnable(Runnable),
-    Ready(Box<dyn FnOnce(&mut App)>)
+    Runnable(Runnable)
 }
 
 struct App {
     pxy: EventLoopProxy<AsyncEvent>,
+    async_cb: Rc<Cell<Option<Box<dyn FnOnce(&mut App)>>>>,
     last_mouse_pos: PhysicalPosition<f64>,
     board: State,
-    win: Option<Rc<Window>>,
-    sfc: Option<softbuffer::Surface<Rc<Window>, Rc<Window>>>,
-    fb: Pixmap,
-    mask: Mask,
+    sfc: Option<softbuffer::Surface<OwnedDisplayHandle, Window>>,
+    fb: Option<Pixmap>,
+    mask: Option<Mask>,
     transform: Transform,
     rend: Renderer,
 
@@ -37,17 +36,17 @@ impl App {
     fn new(pxy: EventLoopProxy<AsyncEvent>) -> Self {
         let board = State::default();
         println!("1");
-        let (_, (x, y)) = maximize(board, Player::X);
+        let (x, y) = maximize(board, Player::X).1.unwrap();
         println!("2");
 
         Self {
             pxy,
+            async_cb: Rc::new(Cell::new(None)),
             last_mouse_pos: Default::default(),
             board: board.do_move(x, y).unwrap(),
-            win: None,
             sfc: None,
-            fb: Pixmap::new(1, 1).unwrap(),
-            mask: Mask::new(1, 1).unwrap(),
+            fb: None,
+            mask: None,
             transform: Transform::identity(),
             rend: Renderer::default(),
             _phantom: PhantomData
@@ -57,66 +56,86 @@ impl App {
     #[expect(dead_code)]
     fn spawn<T: 'static>(&self, fut: impl Future<Output = T> + 'static) {
         let pxy = self.pxy.clone();
-        let (r, t) = unsafe { async_task::spawn_unchecked(
+        let (r, t) = async_task::spawn_local(
             fut,
             move |r| { let _ = pxy.send_event(AsyncEvent::Runnable(r)); }
-        ) };
+        );
         t.detach();
         r.schedule();
     }
 
     fn spawn_cb<T: 'static>(&self, fut: impl Future<Output = T> + 'static, cb: impl for<'a> FnOnce(&'a mut App, T) + 'static) {
-        let pxy1 = self.pxy.clone();
-        let pxy2 = self.pxy.clone();
-        let (r, t) = unsafe { async_task::spawn_unchecked(
+        let pxy = self.pxy.clone();
+        let async_cb = self.async_cb.clone();
+        let (r, t) = async_task::spawn_local(
             async move {
                 let res = fut.await;
                 let cb = Box::new(move |this: &mut App| {
                     cb(this, res);
                 });
-                let _ = pxy1.send_event(AsyncEvent::Ready(cb));
+                let prev = async_cb.replace(Some(cb));
+                assert!(prev.is_none());
             },
-            move |r| { let _ = pxy2.send_event(AsyncEvent::Runnable(r)); }
-        ) };
+            move |r| { let _ = pxy.send_event(AsyncEvent::Runnable(r)); }
+        );
         t.detach();
         r.schedule();
     }
 
     fn on_resize(&mut self, w: u32, h: u32) {
-        self.sfc.as_mut().unwrap().resize(w.try_into().unwrap(), h.try_into().unwrap()).unwrap();
-        self.fb = Pixmap::new(w, h).unwrap(); // todo: reuse buffer
-        self.mask = Mask::new(w, h).unwrap();
-
         let (x, y, s) = if w >= h {
             ((w - h) / 2, 0, h)
         } else {
             (0, (h - w) / 2, w)
         };
 
-        self.mask.fill_path(
-            &PathBuilder::from_rect(Rect::from_xywh(x as f32, y as f32, s as f32, s as f32).unwrap()),
-            FillRule::Winding,
-            false,
-            Transform::identity()
-        );
-        self.transform = Transform::from_bbox(NonZeroRect::from_xywh(x as f32, y as f32, s as f32 / 100., s as f32 / 100.).unwrap())
+        self.transform = Transform::from_bbox(NonZeroRect::from_xywh(x as f32, y as f32, s as f32 / 100., s as f32 / 100.).unwrap());
+
+        self.sfc.as_mut().unwrap().resize(w.try_into().unwrap(), h.try_into().unwrap()).unwrap();
+        
+        let sz = IntSize::from_wh(w, h).unwrap();
+        self.fb = Some(match self.fb.take() {
+            None => Pixmap::new(w, h).unwrap(),
+            Some(fb) => {
+                let mut fb = fb.take();
+                fb.resize(4 * (w as usize) * (h as usize), 0);
+                Pixmap::from_vec(fb, sz).unwrap()
+            }
+        });
+
+        self.mask = Some({
+            let mut mask = match self.mask.take() {
+                None => Mask::new(w, h).unwrap(),
+                Some(mask) => {
+                    let mut mask = mask.take();
+                    mask.resize((w as usize) * (h as usize), 0);
+                    Mask::from_vec(mask, sz).unwrap()
+                }
+            };
+            mask.fill_path(
+                &PathBuilder::from_rect(Rect::from_xywh(0., 0., 100., 100.).unwrap()),
+                FillRule::Winding,
+                false,
+                self.transform
+            );
+            mask
+        });
     }
 }
 
 impl ApplicationHandler<AsyncEvent> for App {
     fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
-        assert!(self.win.is_none());
+        assert!(self.sfc.is_none());
 
-        let win = Rc::new(event_loop.create_window(WindowAttributes::default()
+        let win = event_loop.create_window(WindowAttributes::default()
             .with_resizable(true)
-            .with_inner_size(PhysicalSize::new(300, 300))).unwrap());
+            .with_inner_size(PhysicalSize::new(300, 300))).unwrap();
 
-        let ctx = Context::new(win.clone()).unwrap();
-        let sfc = Surface::new(&ctx, win.clone()).unwrap();
+        let ctx = Context::new(event_loop.owned_display_handle()).unwrap();
+        let sfc = Surface::new(&ctx, win).unwrap();
 
-        let sz = win.inner_size();
+        let sz = sfc.window().inner_size();
         
-        self.win = Some(win);
         self.sfc = Some(sfc);
 
         self.on_resize(sz.width, sz.height);
@@ -137,10 +156,10 @@ impl ApplicationHandler<AsyncEvent> for App {
             RedrawRequested => {
                 self.rend.prepare(&self.board);
 
-                let fb = &mut self.fb;
+                let fb = self.fb.as_mut().unwrap();
                 fb.fill(Color::WHITE);
 
-                self.rend.render(&mut fb.as_mut(), self.transform, Some(&self.mask));
+                self.rend.render(&mut fb.as_mut(), self.transform, self.mask.as_ref());
 
                 let sfc = self.sfc.as_mut().unwrap();
                 let mut buf = sfc.buffer_mut().unwrap();
@@ -154,6 +173,7 @@ impl ApplicationHandler<AsyncEvent> for App {
                 self.last_mouse_pos = position;
             },
             MouseInput { device_id: _, state: ElementState::Pressed, button: MouseButton::Left } => {
+                println!("clicky");
                 let mut pt = Point { x: self.last_mouse_pos.x as f32, y: self.last_mouse_pos.y as f32 };
                 self.transform.invert().unwrap().map_point(&mut pt);
 
@@ -164,13 +184,26 @@ impl ApplicationHandler<AsyncEvent> for App {
                 let x = (pt.x * (N as f32) / 100.) as u8;
                 let y = (pt.y * (N as f32) / 100.) as u8;
 
-                if self.board.turn() == Player::O && self.board.score().is_none() && let Ok(mut nst) = self.board.do_move(x, y) {
-                    let (_, (x, y)) = maximize(nst, Player::X);
-                    if x != 255 && y != 255 {
-                        nst = nst.do_move(x, y).unwrap();
-                    }
+                if self.board.turn() == Player::O && self.board.score().is_none() && let Ok(nst) = self.board.do_move(x, y) {
                     self.board = nst;
-                    self.win.as_ref().unwrap().request_redraw();
+                    self.sfc.as_ref().unwrap().window().request_redraw();
+
+                    self.spawn_cb(
+                        async move {
+                            Timer::after(Duration::from_millis(200)).await;
+                            let (_, pos) = maximize(nst, Player::X);
+                            if let Some((x, y)) = pos {
+                                Some(nst.do_move(x, y).unwrap())
+                            } else {
+                                None
+                            }
+                        }, |this, nst| {
+                            if let Some(nst) = nst {
+                                this.board = nst;
+                                this.sfc.as_ref().unwrap().window().request_redraw();
+                            }
+                        }
+                    );
                 }
             },
             Resized(PhysicalSize { width, height }) => self.on_resize(width, height),
@@ -180,8 +213,12 @@ impl ApplicationHandler<AsyncEvent> for App {
 
     fn user_event(&mut self, _event_loop: &winit::event_loop::ActiveEventLoop, event: AsyncEvent) {
         match event {
-            AsyncEvent::Runnable(r) => { r.run(); },
-            AsyncEvent::Ready(cb) => { cb(self); }
+            AsyncEvent::Runnable(r) => {
+                r.run();
+                if let Some(cb) = self.async_cb.take() {
+                    cb(self);
+                }
+            }
         }
     }
 }
