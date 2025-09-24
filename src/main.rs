@@ -62,7 +62,7 @@ impl App {
 
         this.spawn_cb(
             async move {
-                let (_, pos) = unblock(move || maximize(board, Player::X)).await;
+                let pos = unblock(move || maximize(board, Player::X)).await;
                 let (x, y) = pos.unwrap();
                 board.do_move(x, y).unwrap()
             },
@@ -154,7 +154,7 @@ impl ApplicationHandler<AsyncEvent> for App {
         } else {
             let win = event_loop.create_window(WindowAttributes::default()
                 .with_resizable(true)
-                .with_inner_size(PhysicalSize::new( 300, 300))).unwrap();
+                .with_inner_size(PhysicalSize::new( 600, 600))).unwrap();
 
             let ctx = Context::new(event_loop.owned_display_handle()).unwrap();
             let sfc = Surface::new(&ctx, win).unwrap();
@@ -216,7 +216,7 @@ impl ApplicationHandler<AsyncEvent> for App {
                         self.timers.push(pt);
                         self.spawn_cb(
                             async move {
-                                let (_, pos) = unblock(move || maximize(nst, Player::X)).await;
+                                let pos = unblock(move || maximize(nst, Player::X)).await;
                                 timer.await;
                                 let (x, y) = pos.unwrap();
                                 nst.do_move(x, y).unwrap()
