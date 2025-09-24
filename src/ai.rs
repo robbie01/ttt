@@ -1,11 +1,18 @@
 use std::hash::{BuildHasherDefault, DefaultHasher};
 
 use rayon::iter::ParallelIterator as _;
-use scc::HashMap;
+use scc::{hash_map::Entry, HashMap};
 
 use crate::{game::{Player, Score, State}, N};
 
-static MEMO: HashMap<u64, (i8, Option<(u8, u8)>), BuildHasherDefault<DefaultHasher>> = HashMap::with_hasher(BuildHasherDefault::new());
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Bound {
+    Exact,
+    LowerBound,
+    UpperBound
+}
+
+static MEMO: HashMap<u64, (i8, Option<(u8, u8)>, Bound), BuildHasherDefault<DefaultHasher>> = HashMap::with_hasher(BuildHasherDefault::new());
 
 fn densely_pack(board: [Option<Player>; (N*N) as usize], p: Player) -> u64 {
     const {
@@ -40,38 +47,58 @@ pub fn maximize(st: State, p: Player) -> Option<(u8, u8)> {
 
         let m = densely_pack(st.board(), p);
 
-        if let Some(v) = MEMO.read_sync(&m, |_, &v| v) {
-            return v
+        if let Some((score, pos, bound)) = MEMO.read_sync(&m, |_, &v| v) &&
+            (bound == Bound::Exact || (bound == Bound::LowerBound && score >= beta) || (bound == Bound::UpperBound && score <= alpha)) {
+            return (score, pos)
         }
 
         assert_eq!(st.turn(), Some(p));
 
         let v = if par_depth == 0 {
-            let mut max = (-127, None);
+            let old_alpha = alpha;
+
+            let mut max = None;
             for (x, y) in st.succs() {
                 let nst = st.do_move(x, y).unwrap();
                 let (score, _) = inner(nst, p.other(), 0, -beta, -alpha);
-                if -score > max.0 {
-                    max = (-score, Some((x, y)));
+                let score = -score;
+                if max.is_none_or(|(ms, _)| score > ms) {
+                    max = Some((score, Some((x, y))));
                 }
-                alpha = alpha.max(max.0);
+                alpha = alpha.max(score);
                 if alpha >= beta { break }
             }
-            max
+
+            let (score, pos) = max.unwrap();
+
+            let ent = MEMO.entry_sync(m);
+            if !matches!(ent, Entry::Occupied(ref o) if o.2 == Bound::Exact) {
+                let bound = if score <= old_alpha {
+                    Bound::UpperBound
+                } else if score >= beta {
+                    Bound::LowerBound
+                } else {
+                    Bound::Exact
+                };
+                ent.insert_entry((score, pos, bound));
+            }
+            (score, pos)
         } else {
-            st.par_succs()
+            let (score, pos) = st.par_succs()
                 .map(|(x, y)| {
                     let nst = st.do_move(x, y).unwrap();
                     let (score, _) = inner(nst, p.other(), par_depth - 1, -beta, -alpha);
                     (-score, Some((x, y)))
                 })
-                .max_by_key(|&(score, _)| score).unwrap()
-        };
+                .max_by_key(|&(score, _)| score).unwrap();
+            
+            MEMO.upsert_sync(m, (score, pos, Bound::Exact));
 
-        let _ = MEMO.insert_sync(m, v);
+            (score, pos)
+        };
 
         v
     }
 
-    inner(st, p, 5, -128, 127).1
+    inner(st, p, 2, -2, 2).1
 }
