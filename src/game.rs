@@ -193,7 +193,6 @@ impl State {
             })
     }
 
-    #[expect(dead_code)]
     pub fn succs(self) -> impl Iterator<Item = (u8, u8)> {
         assert!(self.score().is_none());
 

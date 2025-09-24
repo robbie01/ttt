@@ -28,7 +28,7 @@ fn densely_pack(board: [Option<Player>; (N*N) as usize], p: Player) -> u64 {
 }
 
 pub fn maximize(st: State, p: Player) -> Option<(u8, u8)> {
-    fn inner(st: State, p: Player) -> (i8, Option<(u8, u8)>) {
+    fn inner(st: State, p: Player, par_depth: u8, mut alpha: i8, beta: i8) -> (i8, Option<(u8, u8)>) {
         // st caches wins, so this is faster than memo
         if let Some(score) = st.score() {
             return match score {
@@ -46,18 +46,32 @@ pub fn maximize(st: State, p: Player) -> Option<(u8, u8)> {
 
         assert_eq!(st.turn(), Some(p));
 
-        let v = st.par_succs()
-            .map(|(x, y)| {
+        let v = if par_depth == 0 {
+            let mut max = (-127, None);
+            for (x, y) in st.succs() {
                 let nst = st.do_move(x, y).unwrap();
-                let (score, _) = inner(nst, p.other());
-                (-score, Some((x, y)))
-            })
-            .max_by_key(|&(score, _)| score).unwrap();
+                let (score, _) = inner(nst, p.other(), 0, -beta, -alpha);
+                if -score > max.0 {
+                    max = (-score, Some((x, y)));
+                }
+                alpha = alpha.max(max.0);
+                if alpha >= beta { break }
+            }
+            max
+        } else {
+            st.par_succs()
+                .map(|(x, y)| {
+                    let nst = st.do_move(x, y).unwrap();
+                    let (score, _) = inner(nst, p.other(), par_depth - 1, -beta, -alpha);
+                    (-score, Some((x, y)))
+                })
+                .max_by_key(|&(score, _)| score).unwrap()
+        };
 
         let _ = MEMO.insert_sync(m, v);
 
         v
     }
 
-    inner(st, p).1
+    inner(st, p, 5, -128, 127).1
 }
