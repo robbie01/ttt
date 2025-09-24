@@ -6,7 +6,7 @@ mod game;
 mod rend;
 mod timer;
 
-use std::{cell::Cell, collections::{binary_heap::PeekMut, BinaryHeap}, iter, marker::PhantomData, rc::Rc, time::Duration};
+use std::{cell::Cell, collections::{binary_heap, BinaryHeap}, iter, marker::PhantomData, rc::Rc, time::Duration};
 
 use async_task::Runnable;
 use softbuffer::{Context, Surface};
@@ -66,7 +66,7 @@ impl App {
                 let (x, y) = pos.unwrap();
                 board.do_move(x, y).unwrap()
             },
-            move |this, nst| {
+            |this, nst| {
                 this.board = nst;
                 this.sfc.as_ref().unwrap().window().request_redraw();
             }
@@ -221,7 +221,7 @@ impl ApplicationHandler<AsyncEvent> for App {
                                 let (x, y) = pos.unwrap();
                                 nst.do_move(x, y).unwrap()
                             },
-                            move |this, nst| {
+                            |this, nst| {
                                 this.board = nst;
                                 this.sfc.as_ref().unwrap().window().request_redraw();
                             }
@@ -238,7 +238,7 @@ impl ApplicationHandler<AsyncEvent> for App {
         if let StartCause::ResumeTimeReached { start, .. } = cause {
             loop {
                 if let Some(t) = self.timers.peek_mut() && t.at <= start {
-                    PeekMut::pop(t).set()
+                    binary_heap::PeekMut::pop(t).set()
                 } else {
                     break
                 }
