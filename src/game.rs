@@ -4,7 +4,7 @@ use rayon::iter::{IndexedParallelIterator as _, IntoParallelIterator as _, Paral
 
 use crate::N;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Player {
     X,
     O

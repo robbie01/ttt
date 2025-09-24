@@ -1,18 +1,21 @@
+#![forbid(unsafe_code)]
+
 mod ai;
 mod game;
 mod rend;
+mod timer;
 
-use std::{cell::Cell, iter, marker::PhantomData, rc::Rc, time::Duration};
+use std::{cell::Cell, collections::{binary_heap::PeekMut, BinaryHeap}, iter, marker::PhantomData, rc::Rc, time::Duration};
 
-use async_io::Timer;
 use async_task::Runnable;
+use blocking::unblock;
 use softbuffer::{Context, Surface};
 use tiny_skia::{Color, FillRule, IntSize, Mask, NonZeroRect, PathBuilder, Pixmap, Point, Rect, Transform};
-use winit::{application::ApplicationHandler, dpi::{PhysicalPosition, PhysicalSize}, event::{ElementState, MouseButton}, event_loop::{EventLoop, EventLoopProxy, OwnedDisplayHandle}, window::{Window, WindowAttributes}};
+use winit::{application::ApplicationHandler, dpi::{PhysicalPosition, PhysicalSize}, event::{ElementState, MouseButton, StartCause}, event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy, OwnedDisplayHandle}, window::{Window, WindowAttributes}};
 
-use crate::{ai::maximize, game::{Player, State}, rend::Renderer};
+use crate::{ai::maximize, game::{Player, State}, rend::Renderer, timer::{PendingTimer, Timer}};
 
-const N: u32 = 3;
+const N: u32 = 4;
 
 enum AsyncEvent {
     Runnable(Runnable)
@@ -21,6 +24,7 @@ enum AsyncEvent {
 struct App {
     pxy: EventLoopProxy<AsyncEvent>,
     async_cb: Rc<Cell<Option<Box<dyn FnOnce(&mut App)>>>>,
+    timers: BinaryHeap<PendingTimer>,
     last_mouse_pos: PhysicalPosition<f64>,
     board: State,
     sfc: Option<softbuffer::Surface<OwnedDisplayHandle, Window>>,
@@ -35,22 +39,34 @@ struct App {
 impl App {
     fn new(pxy: EventLoopProxy<AsyncEvent>) -> Self {
         let board = State::default();
-        println!("1");
-        let (x, y) = maximize(board, Player::X).1.unwrap();
-        println!("2");
-
-        Self {
+        
+        let this = Self {
             pxy,
             async_cb: Rc::new(Cell::new(None)),
+            timers: BinaryHeap::new(),
             last_mouse_pos: Default::default(),
-            board: board.do_move(x, y).unwrap(),
+            board,
             sfc: None,
             fb: None,
             mask: None,
             transform: Transform::identity(),
             rend: Renderer::default(),
             _phantom: PhantomData
-        }
+        };
+
+        this.spawn_cb(
+            async move {
+                let (_, pos) = unblock(move || maximize(board, Player::X)).await;
+                let (x, y) = pos.unwrap();
+                board.do_move(x, y).unwrap()
+            },
+            move |this, nst| {
+                this.board = nst;
+                this.sfc.as_ref().unwrap().window().request_redraw();
+            }
+        );
+
+        this
     }
 
     #[expect(dead_code)]
@@ -124,28 +140,30 @@ impl App {
 }
 
 impl ApplicationHandler<AsyncEvent> for App {
-    fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         assert!(self.sfc.is_none());
 
-        let win = event_loop.create_window(WindowAttributes::default()
-            .with_resizable(true)
-            .with_inner_size(PhysicalSize::new(300, 300))).unwrap();
+        let sz = if let Some(ref sfc) = self.sfc {
+            sfc.window().inner_size()
+        } else {
+            let win = event_loop.create_window(WindowAttributes::default()
+                .with_resizable(true)
+                .with_inner_size(PhysicalSize::new( 300, 300))).unwrap();
 
-        let ctx = Context::new(event_loop.owned_display_handle()).unwrap();
-        let sfc = Surface::new(&ctx, win).unwrap();
+            let ctx = Context::new(event_loop.owned_display_handle()).unwrap();
+            let sfc = Surface::new(&ctx, win).unwrap();
 
-        let sz = sfc.window().inner_size();
+            let sz = sfc.window().inner_size();
+            self.sfc = Some(sfc);
+            sz
+        };
         
-        self.sfc = Some(sfc);
-
         self.on_resize(sz.width, sz.height);
-        
-        self.spawn_cb(Timer::after(Duration::from_secs(1)), |a, _| println!("WHAT THE FUCK {:?}", a as *mut _));
     }
 
     fn window_event(
         &mut self,
-        event_loop: &winit::event_loop::ActiveEventLoop,
+        event_loop: &ActiveEventLoop,
         _window_id: winit::window::WindowId,
         event: winit::event::WindowEvent,
     ) {
@@ -173,7 +191,6 @@ impl ApplicationHandler<AsyncEvent> for App {
                 self.last_mouse_pos = position;
             },
             MouseInput { device_id: _, state: ElementState::Pressed, button: MouseButton::Left } => {
-                println!("clicky");
                 let mut pt = Point { x: self.last_mouse_pos.x as f32, y: self.last_mouse_pos.y as f32 };
                 self.transform.invert().unwrap().map_point(&mut pt);
 
@@ -188,22 +205,22 @@ impl ApplicationHandler<AsyncEvent> for App {
                     self.board = nst;
                     self.sfc.as_ref().unwrap().window().request_redraw();
 
-                    self.spawn_cb(
-                        async move {
-                            Timer::after(Duration::from_millis(200)).await;
-                            let (_, pos) = maximize(nst, Player::X);
-                            if let Some((x, y)) = pos {
-                                Some(nst.do_move(x, y).unwrap())
-                            } else {
-                                None
-                            }
-                        }, |this, nst| {
-                            if let Some(nst) = nst {
+                    if self.board.score().is_none() {
+                        let (pt, timer) = Timer::after(Duration::from_millis(200));
+                        self.timers.push(pt);
+                        self.spawn_cb(
+                            async move {
+                                timer.await;
+                                let (_, pos) = unblock(move || maximize(nst, Player::X)).await;
+                                let (x, y) = pos.unwrap();
+                                nst.do_move(x, y).unwrap()
+                            },
+                            move |this, nst| {
                                 this.board = nst;
                                 this.sfc.as_ref().unwrap().window().request_redraw();
                             }
-                        }
-                    );
+                        );
+                    }
                 }
             },
             Resized(PhysicalSize { width, height }) => self.on_resize(width, height),
@@ -211,7 +228,30 @@ impl ApplicationHandler<AsyncEvent> for App {
         }
     }
 
-    fn user_event(&mut self, _event_loop: &winit::event_loop::ActiveEventLoop, event: AsyncEvent) {
+    fn new_events(&mut self, _event_loop: &ActiveEventLoop, cause: winit::event::StartCause) {
+        if let StartCause::ResumeTimeReached { start, .. } | StartCause::WaitCancelled { start, .. } = cause {
+            loop {
+                if let Some(t) = self.timers.peek_mut() {
+                    if t.at <= start {
+                        PeekMut::pop(t).set()
+                    } else {
+                        break
+                    }
+                } else {
+                    break
+                }
+            }
+        }
+    }
+
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        event_loop.set_control_flow(match self.timers.peek() {
+            Some(t) => ControlFlow::WaitUntil(t.at),
+            None => ControlFlow::Wait
+        });
+    }
+
+    fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: AsyncEvent) {
         match event {
             AsyncEvent::Runnable(r) => {
                 r.run();
