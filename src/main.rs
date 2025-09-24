@@ -1,4 +1,5 @@
 #![forbid(unsafe_code)]
+#![allow(clippy::type_complexity)]
 
 mod ai;
 mod game;
@@ -8,7 +9,6 @@ mod timer;
 use std::{cell::Cell, collections::{binary_heap::PeekMut, BinaryHeap}, iter, marker::PhantomData, rc::Rc, time::Duration};
 
 use async_task::Runnable;
-use blocking::unblock;
 use softbuffer::{Context, Surface};
 use tiny_skia::{Color, FillRule, IntSize, Mask, NonZeroRect, PathBuilder, Pixmap, Point, Rect, Transform};
 use winit::{application::ApplicationHandler, dpi::{PhysicalPosition, PhysicalSize}, event::{ElementState, MouseButton, StartCause}, event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy, OwnedDisplayHandle}, window::{Window, WindowAttributes}};
@@ -16,6 +16,12 @@ use winit::{application::ApplicationHandler, dpi::{PhysicalPosition, PhysicalSiz
 use crate::{ai::maximize, game::{Player, State}, rend::Renderer, timer::{PendingTimer, Timer}};
 
 const N: u32 = 4;
+
+async fn unblock<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+    let (prod, cons) = oneshot::channel();
+    rayon::spawn(move || { let _ = prod.send(f()); });
+    cons.await.unwrap()
+}
 
 enum AsyncEvent {
     Runnable(Runnable)
@@ -210,8 +216,8 @@ impl ApplicationHandler<AsyncEvent> for App {
                         self.timers.push(pt);
                         self.spawn_cb(
                             async move {
-                                timer.await;
                                 let (_, pos) = unblock(move || maximize(nst, Player::X)).await;
+                                timer.await;
                                 let (x, y) = pos.unwrap();
                                 nst.do_move(x, y).unwrap()
                             },
@@ -229,14 +235,10 @@ impl ApplicationHandler<AsyncEvent> for App {
     }
 
     fn new_events(&mut self, _event_loop: &ActiveEventLoop, cause: winit::event::StartCause) {
-        if let StartCause::ResumeTimeReached { start, .. } | StartCause::WaitCancelled { start, .. } = cause {
+        if let StartCause::ResumeTimeReached { start, .. } = cause {
             loop {
-                if let Some(t) = self.timers.peek_mut() {
-                    if t.at <= start {
-                        PeekMut::pop(t).set()
-                    } else {
-                        break
-                    }
+                if let Some(t) = self.timers.peek_mut() && t.at <= start {
+                    PeekMut::pop(t).set()
                 } else {
                     break
                 }

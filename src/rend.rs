@@ -14,10 +14,10 @@ static TILE_PAINT: LazyLock<Paint> = LazyLock::new(|| Paint {
     ..Default::default()
 });
 
-const STROKE: Stroke = Stroke {
+const STROKE: &Stroke = &Stroke {
     width: 5. / 3.,
     miter_limit: 4.,
-    line_cap: LineCap::Butt,
+    line_cap: LineCap::Round,
     line_join: LineJoin::Miter,
     dash: None
 };
@@ -61,7 +61,7 @@ impl Renderer {
                 self.paths.get_mut().push(Drawable::Stroke(
                     path,
                     &GRID_PAINT,
-                    &STROKE
+                    STROKE
                 ));
             } else {
                 self.path_buffers.get_mut().push(path_buffer);
@@ -87,7 +87,7 @@ impl Renderer {
                 self.paths.get_mut().push(Drawable::Stroke(
                     path,
                     &TILE_PAINT,
-                    &STROKE
+                    STROKE
                 ));
             } else {
                 self.path_buffers.get_mut().push(path_buffer);
