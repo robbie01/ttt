@@ -207,7 +207,7 @@ impl ApplicationHandler<AsyncEvent> for App {
                 let x = (pt.x * (N as f32) / 100.) as u8;
                 let y = (pt.y * (N as f32) / 100.) as u8;
 
-                if self.board.turn() == Player::O && self.board.score().is_none() && let Ok(nst) = self.board.do_move(x, y) {
+                if self.board.turn() == Some(Player::O) && let Ok(nst) = self.board.do_move(x, y) {
                     self.board = nst;
                     self.sfc.as_ref().unwrap().window().request_redraw();
 

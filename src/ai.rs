@@ -43,7 +43,7 @@ pub fn maximize(st: State, p: Player) -> (i8, Option<(u8, u8)>) {
         return v
     }
 
-    assert_eq!(st.turn(), p);
+    assert_eq!(st.turn(), Some(p));
 
     let v = st.par_succs()
         .map(|(x, y)| {

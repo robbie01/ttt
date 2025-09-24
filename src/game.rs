@@ -139,7 +139,11 @@ impl State {
         self.board
     }
 
-    pub fn turn(self) -> Player {
+    pub fn turn(self) -> Option<Player> {
+        if self.score.is_some() {
+            return None;
+        }
+
         let (x, o) = self.board.into_iter().fold((0u8, 0u8), |(x, o), p| {
             match p {
                 Some(Player::X) => (x + 1, o),
@@ -147,12 +151,13 @@ impl State {
                 None => (x, o)
             }
         });
-        if x == o {
+
+        Some(if x == o {
             Player::X
         } else {
             assert_eq!(Some(x), o.checked_add(1));
             Player::O
-        }
+        })
     }
 
     pub fn do_move(mut self, x: u8, y: u8) -> Result<Self, InvalidMove> {
@@ -172,7 +177,7 @@ impl State {
             return Err(InvalidMove);
         }
 
-        self.board[idx] = Some(self.turn());
+        self.board[idx] = self.turn();
         self.score = self.check_win();
         Ok(self)
     }
