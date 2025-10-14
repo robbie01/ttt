@@ -75,7 +75,6 @@ impl App {
         this
     }
 
-    #[expect(dead_code)]
     fn spawn<T: 'static>(&self, fut: impl Future<Output = T> + 'static) {
         let pxy = self.pxy.clone();
         let (r, t) = async_task::spawn_local(
@@ -87,21 +86,15 @@ impl App {
     }
 
     fn spawn_cb<T: 'static>(&self, fut: impl Future<Output = T> + 'static, cb: impl for<'a> FnOnce(&'a mut App, T) + 'static) {
-        let pxy = self.pxy.clone();
         let async_cb = self.async_cb.clone();
-        let (r, t) = async_task::spawn_local(
-            async move {
-                let res = fut.await;
-                let cb = Box::new(move |this: &mut App| {
-                    cb(this, res);
-                });
-                let prev = async_cb.replace(Some(cb));
-                assert!(prev.is_none());
-            },
-            move |r| { let _ = pxy.send_event(AsyncEvent::Runnable(r)); }
-        );
-        t.detach();
-        r.schedule();
+        self.spawn(async move {
+            let res = fut.await;
+            let cb = Box::new(move |this: &mut App| {
+                cb(this, res);
+            });
+            let prev = async_cb.replace(Some(cb));
+            assert!(prev.is_none());
+        })
     }
 
     fn on_resize(&mut self, w: u32, h: u32) {
@@ -236,12 +229,8 @@ impl ApplicationHandler<AsyncEvent> for App {
 
     fn new_events(&mut self, _event_loop: &ActiveEventLoop, cause: winit::event::StartCause) {
         if let StartCause::ResumeTimeReached { start, .. } = cause {
-            loop {
-                if let Some(t) = self.timers.peek_mut() && t.at <= start {
-                    binary_heap::PeekMut::pop(t).set()
-                } else {
-                    break
-                }
+            while let Some(t) = self.timers.peek_mut() && t.at <= start {
+                binary_heap::PeekMut::pop(t).set()
             }
         }
     }

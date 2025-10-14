@@ -8,8 +8,8 @@ use crate::{game::{Player, Score, State}, N};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Bound {
     Exact,
-    LowerBound,
-    UpperBound
+    Lower,
+    Upper
 }
 
 static MEMO: HashMap<u64, (i8, Option<(u8, u8)>, Bound), BuildHasherDefault<DefaultHasher>> = HashMap::with_hasher(BuildHasherDefault::new());
@@ -48,13 +48,13 @@ pub fn maximize(st: State, p: Player) -> Option<(u8, u8)> {
         let m = densely_pack(st.board(), p);
 
         if let Some((score, pos, bound)) = MEMO.read_sync(&m, |_, &v| v) &&
-            (bound == Bound::Exact || (bound == Bound::LowerBound && score >= beta) || (bound == Bound::UpperBound && score <= alpha)) {
+            (bound == Bound::Exact || (bound == Bound::Lower && score >= beta) || (bound == Bound::Upper && score <= alpha)) {
             return (score, pos)
         }
 
         assert_eq!(st.turn(), Some(p));
 
-        let v = if par_depth == 0 {
+        if par_depth == 0 {
             let old_alpha = alpha;
 
             let mut max = None;
@@ -74,9 +74,9 @@ pub fn maximize(st: State, p: Player) -> Option<(u8, u8)> {
             let ent = MEMO.entry_sync(m);
             if !matches!(ent, Entry::Occupied(ref o) if o.2 == Bound::Exact) {
                 let bound = if score <= old_alpha {
-                    Bound::UpperBound
+                    Bound::Upper
                 } else if score >= beta {
-                    Bound::LowerBound
+                    Bound::Lower
                 } else {
                     Bound::Exact
                 };
@@ -95,9 +95,7 @@ pub fn maximize(st: State, p: Player) -> Option<(u8, u8)> {
             MEMO.upsert_sync(m, (score, pos, Bound::Exact));
 
             (score, pos)
-        };
-
-        v
+        }
     }
 
     inner(st, p, 2, -2, 2).1
