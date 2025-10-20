@@ -1,4 +1,3 @@
-#![forbid(unsafe_code)]
 #![allow(clippy::type_complexity)]
 
 mod ai;
@@ -6,7 +5,7 @@ mod game;
 mod rend;
 mod timer;
 
-use std::{cell::Cell, collections::{binary_heap, BinaryHeap}, iter, marker::PhantomData, rc::Rc, time::Duration};
+use std::{cell::Cell, collections::{binary_heap, BinaryHeap}, iter, rc::Rc, time::{Duration, Instant}};
 
 use async_task::Runnable;
 use softbuffer::{Context, Surface};
@@ -37,9 +36,7 @@ struct App {
     fb: Option<Pixmap>,
     mask: Option<Mask>,
     transform: Transform,
-    rend: Renderer,
-
-    _phantom: PhantomData<*mut ()>
+    rend: Renderer
 }
 
 impl App {
@@ -56,8 +53,7 @@ impl App {
             fb: None,
             mask: None,
             transform: Transform::identity(),
-            rend: Renderer::default(),
-            _phantom: PhantomData
+            rend: Renderer::default()
         };
 
         this.spawn_cb(
@@ -95,6 +91,19 @@ impl App {
             let prev = async_cb.replace(Some(cb));
             assert!(prev.is_none());
         })
+    }
+
+    #[expect(dead_code)]
+    fn timer_at(&mut self, instant: Instant) -> Timer {
+        let (pt, timer) = Timer::at(instant);
+        self.timers.push(pt);
+        timer
+    }
+
+    fn timer_after(&mut self, duration: Duration) -> Timer {
+        let (pt, timer) = Timer::after(duration);
+        self.timers.push(pt);
+        timer
     }
 
     fn on_resize(&mut self, w: u32, h: u32) {
@@ -205,8 +214,7 @@ impl ApplicationHandler<AsyncEvent> for App {
                     self.sfc.as_ref().unwrap().window().request_redraw();
 
                     if self.board.score().is_none() {
-                        let (pt, timer) = Timer::after(Duration::from_millis(200));
-                        self.timers.push(pt);
+                        let timer = self.timer_after(Duration::from_millis(200));
                         self.spawn_cb(
                             async move {
                                 let pos = unblock(move || maximize(nst, Player::X)).await;

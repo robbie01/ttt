@@ -9,7 +9,7 @@ struct TimerInner {
 }
 
 pub struct Timer {
-    inner: Rc<TimerInner>
+    inner: Option<Rc<TimerInner>>
 }
 
 impl Timer {
@@ -20,7 +20,7 @@ impl Timer {
                 at: instant,
                 inner: Rc::downgrade(&inner)
             },
-            Timer { inner }
+            Timer { inner: Some(inner) }
         )
     }
 
@@ -28,19 +28,26 @@ impl Timer {
         let instant = Instant::now() + duration;
         Self::at(instant)
     }
+
+    #[expect(dead_code)]
+    pub fn never() -> Timer {
+        Timer { inner: None }
+    }
 }
 
 impl Future for Timer {
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        if self.inner.flag.load(Ordering::Relaxed) {
+        let Some(ref inner) = self.inner else { return Poll::Pending };
+
+        if inner.flag.load(Ordering::Relaxed) {
             return Poll::Ready(())
         }
 
-        self.inner.waker.register(cx.waker());
+        inner.waker.register(cx.waker());
 
-        if self.inner.flag.load(Ordering::Relaxed) {
+        if inner.flag.load(Ordering::Relaxed) {
             Poll::Ready(())
         } else {
             Poll::Pending
@@ -78,6 +85,7 @@ impl PartialOrd for PendingTimer {
 
 impl Ord for PendingTimer {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        // Order is correct. This is meant to be inserted into a max-heap (BinaryHeap)
         other.at.cmp(&self.at)
     }
 }
