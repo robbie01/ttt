@@ -1,5 +1,4 @@
-use std::hash::{BuildHasherDefault, DefaultHasher};
-
+use fnv::FnvBuildHasher;
 use rayon::iter::ParallelIterator as _;
 use scc::{hash_map::Entry, HashMap};
 
@@ -12,7 +11,7 @@ enum Bound {
     Upper
 }
 
-static MEMO: HashMap<u64, (i8, Option<(u8, u8)>, Bound), BuildHasherDefault<DefaultHasher>> = HashMap::with_hasher(BuildHasherDefault::new());
+static MEMO: HashMap<u64, (i8, Option<(u8, u8)>, Bound), FnvBuildHasher> = HashMap::with_hasher(FnvBuildHasher::new());
 
 fn densely_pack(board: [Option<Player>; (N*N) as usize], p: Player) -> u64 {
     const {

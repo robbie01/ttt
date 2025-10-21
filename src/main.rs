@@ -5,14 +5,32 @@ mod game;
 mod rend;
 mod timer;
 
-use std::{cell::Cell, collections::{binary_heap, BinaryHeap}, iter, rc::Rc, time::{Duration, Instant}};
+use std::{
+    cell::Cell,
+    collections::{binary_heap, BinaryHeap},
+    iter,
+    mem,
+    rc::Rc,
+    time::{Duration, Instant}
+};
 
 use async_task::Runnable;
 use softbuffer::{Context, Surface};
-use tiny_skia::{Color, FillRule, IntSize, Mask, NonZeroRect, PathBuilder, Pixmap, Point, Rect, Transform};
-use winit::{application::ApplicationHandler, dpi::{PhysicalPosition, PhysicalSize}, event::{ElementState, MouseButton, StartCause}, event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy, OwnedDisplayHandle}, window::{Window, WindowAttributes}};
+use tiny_skia::*;
+use winit::{
+    application::ApplicationHandler,
+    dpi::{PhysicalPosition, PhysicalSize},
+    event::{ElementState, MouseButton, StartCause},
+    event_loop::*,
+    window::{Window, WindowAttributes}
+};
 
-use crate::{ai::maximize, game::{Player, State}, rend::Renderer, timer::{PendingTimer, Timer}};
+use crate::{
+    ai::maximize,
+    game::{Player, State},
+    rend::Renderer,
+    timer::{PendingTimer, Timer}
+};
 
 const N: u32 = 4;
 
@@ -75,7 +93,16 @@ impl App {
         let pxy = self.pxy.clone();
         let (r, t) = async_task::spawn_local(
             fut,
-            move |r| { let _ = pxy.send_event(AsyncEvent::Runnable(r)); }
+            move |r| {
+                // Leak the runnable if we can't send it.
+                // Technically not needed, but it prevents a panic.
+
+                // Destructuring the EventLoopClosed guards against it
+                // potentially implementing Drop in the future.
+                if let Err(EventLoopClosed(v)) = pxy.send_event(AsyncEvent::Runnable(r)) {
+                    mem::forget(v);
+                }
+            }
         );
         t.detach();
         r.schedule();
@@ -136,6 +163,7 @@ impl App {
                     Mask::from_vec(mask, sz).unwrap()
                 }
             };
+            mask.clear();
             mask.fill_path(
                 &PathBuilder::from_rect(Rect::from_xywh(0., 0., 100., 100.).unwrap()),
                 FillRule::Winding,
@@ -191,7 +219,7 @@ impl ApplicationHandler<AsyncEvent> for App {
                 let mut buf = sfc.buffer_mut().unwrap();
                 for (dst, src) in iter::zip(&mut buf[..], fb.pixels()) {
                     let src = src.demultiply();
-                    *dst = u32::from(src.red()) << 16 | u32::from(src.green()) << 8 | u32::from(src.blue());
+                    *dst = u32::from_le_bytes([src.blue(), src.green(), src.red(), 0]);
                 }
                 buf.present().unwrap();
             },
