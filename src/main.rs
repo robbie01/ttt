@@ -134,6 +134,11 @@ impl App {
     }
 
     fn on_resize(&mut self, w: u32, h: u32) {
+        if w == 0 || h == 0 {
+            // Nothing to be gained, but everything to be lost.
+            return;
+        }
+
         let (x, y, s) = if w >= h {
             ((w - h) / 2, 0, h)
         } else {
